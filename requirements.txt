@@ -1,0 +1,5 @@
+redis
+gunicorn
+python-dotenv
+fastapi
+livekit-api
