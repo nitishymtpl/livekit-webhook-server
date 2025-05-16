@@ -1,6 +1,10 @@
 # LiveKit Webhook Service
 
-This service provides a FastAPI application to handle LiveKit webhooks and expose an API for room data.
+LiveKit has an API call limit of 1000 requests per minute, but for some applications you may need to make more requests than that.
+
+This service provides a FastAPI app to handle LiveKit webhooks and expose an API for room data.
+
+If you want to expose more resources, just listen for the webhook, put it in Redis, then serve it with the API! Instead of 1k requests per minute, make as many as you want.
 
 ## Features
 
