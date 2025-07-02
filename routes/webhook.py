@@ -60,6 +60,45 @@ async def handle_webhook(request: Request, authorization: str = Header(None)):
                     logging.info(f"Room {room_sid} marked as finished in Redis.")
                 else:
                     logging.warning(f"Room {room_sid} not found in Redis for finishing.")
+        elif event.event == "participant_joined":
+            if event.room and event.participant:
+                room_sid = event.room.sid
+                participant_sid = event.participant.sid
+                participant_name = event.participant.name
+                join_time = event.created_at
+
+                # Store participant data in a Redis hash, keyed by room_sid:participant_sid
+                redis_client.hset(f"room:{room_sid}:participant:{participant_sid}", mapping={
+                    "name": participant_name,
+                    "join_time": join_time,
+                    "status": "joined"
+                })
+                logging.info(f"Participant {participant_name} ({participant_sid}) joined room {room_sid} at {join_time}.")
+
+        elif event.event == "participant_left":
+            if event.room and event.participant:
+                room_sid = event.room.sid
+                participant_sid = event.participant.sid
+                leave_time = event.created_at
+
+                # Retrieve existing participant data
+                participant_key = f"room:{room_sid}:participant:{participant_sid}"
+                participant_data_raw = redis_client.hgetall(participant_key)
+
+                if participant_data_raw:
+                    participant_data = {k.decode('utf-8'): v.decode('utf-8') for k, v in participant_data_raw.items()}
+                    join_time = float(participant_data.get("join_time", 0))
+                    duration = leave_time - join_time if join_time else 0
+
+                    redis_client.hset(participant_key, mapping={
+                        "leave_time": leave_time,
+                        "duration": duration,
+                        "status": "left"
+                    })
+                    logging.info(f"Participant {participant_data.get('name')} ({participant_sid}) left room {room_sid} at {leave_time}. Duration: {duration}s.")
+                else:
+                    logging.warning(f"Participant {participant_sid} left room {room_sid}, but no join data found.")
+
 
         return {"status": "ok", "event_type": event.event}
     except Exception as e:
