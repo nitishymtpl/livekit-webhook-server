@@ -1,18 +1,29 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 import logging
 import os
 from dotenv import load_dotenv
 from routes.webhook import router as webhook_router
 from routes.api import router as api_router
-import redis
+from models import create_db_and_tables, SessionLocal, get_db # New imports
+from sqlalchemy.orm import Session # New import
 
 load_dotenv()
 
 app = FastAPI()
 
-# Initialize Redis client
-redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379), db=0)
-app.state.redis = redis_client
+# Database setup
+def init_db():
+    create_db_and_tables()
+
+@app.on_event("startup")
+async def startup_event():
+    logging.info("Application startup: Initializing database...")
+    init_db()
+    logging.info("Database initialization complete.")
+
+# Dependency to get DB session
+app.dependency_overrides[get_db] = get_db
+
 
 logging.basicConfig(level=logging.INFO)
 

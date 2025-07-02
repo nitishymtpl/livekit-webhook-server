@@ -1,5 +1,11 @@
-redis
 gunicorn
 python-dotenv
 fastapi
 livekit-api
+psycopg2-binary
+SQLAlchemy
+pytest
+httpx
+# respx # For mocking HTTPX requests - will add if specifically needed for webhook testing beyond current scope
+# SQLAlchemy-Utils # For test database management - will use in-memory SQLite for simplicity first
+# mock / unittest.mock are part of standard library or pytest fixtures.
