@@ -41,7 +41,8 @@ class Assistant(Agent):
 
 
 async def entrypoint(ctx: agents.JobContext):
-    logging.info(f"Agent started for room: {ctx.room.name} (SID: {ctx.room.sid})")
+    room_sid = await ctx.room.sid()
+    logging.info(f"Agent started for room: {ctx.room.name} (SID: {room_sid})")
 
     # --- Egress and Data Submission Logic --- 
     lkapi = api.LiveKitAPI(LIVEKIT_API_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -50,7 +51,8 @@ async def entrypoint(ctx: agents.JobContext):
 
     if all([LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AZURE_STORAGE_ACCOUNT_NAME, AZURE_STORAGE_CONTAINER_NAME, (AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT_KEY)]):
         # Define a unique path within your Azure container
-        recording_filename = f"{ctx.room.name}_{ctx.room.sid}.ogg" # Or .mp4, etc.
+        room_sid = await ctx.room.sid()
+        recording_filename = f"{ctx.room.name}_{room_sid}.ogg" # Or .mp4, etc.
         recording_filepath_in_container = f"recordings/{recording_filename}"
         
         try:
@@ -119,8 +121,9 @@ async def entrypoint(ctx: agents.JobContext):
                 logging.error(f"Error stopping egress {egress_info.egress_id}: {e}")
         
         if ANALYTICS_BACKEND_URL and ANALYTICS_INTERNAL_API_KEY:
+            room_sid = await ctx.room.sid()
             payload = {
-                "call_id": ctx.room.sid,
+                "call_id": room_sid,
                 "transcript": transcript_content,
                 "recording_url": recording_url 
             }
@@ -131,16 +134,16 @@ async def entrypoint(ctx: agents.JobContext):
             
             async with httpx.AsyncClient() as client:
                 try:
-                    logging.info(f"Sending data to analytics backend for room {ctx.room.sid}: {ANALYTICS_BACKEND_URL}")
+                    logging.info(f"Sending data to analytics backend for room {room_sid}: {ANALYTICS_BACKEND_URL}")
                     response = await client.post(ANALYTICS_BACKEND_URL, json=payload, headers=headers)
                     response.raise_for_status()
-                    logging.info(f"Data successfully sent to analytics backend for room {ctx.room.sid}. Status: {response.status_code}")
+                    logging.info(f"Data successfully sent to analytics backend for room {room_sid}. Status: {response.status_code}")
                 except httpx.HTTPStatusError as e:
-                    logging.error(f"HTTP error sending data for room {ctx.room.sid}: {e.response.status_code} - {e.response.text}")
+                    logging.error(f"HTTP error sending data for room {room_sid}: {e.response.status_code} - {e.response.text}")
                 except httpx.RequestError as e:
-                    logging.error(f"Request error sending data for room {ctx.room.sid}: {e}")
+                    logging.error(f"Request error sending data for room {room_sid}: {e}")
                 except Exception as e:
-                    logging.error(f"Unexpected error sending data for room {ctx.room.sid}: {e}")
+                    logging.error(f"Unexpected error sending data for room {room_sid}: {e}")
         else:
             logging.warning("Analytics backend URL or API key not configured. Cannot send data.")
 
