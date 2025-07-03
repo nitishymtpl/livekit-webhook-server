@@ -15,12 +15,6 @@ app = FastAPI()
 def init_db():
     create_db_and_tables()
 
-@app.on_event("startup")
-async def startup_event():
-    logging.info("Application startup: Initializing database...")
-    init_db()
-    logging.info("Database initialization complete.")
-
 # Dependency to get DB session
 app.dependency_overrides[get_db] = get_db
 
