@@ -48,4 +48,4 @@ def get_db():
         db.close()
 
 def create_db_and_tables():
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine, checkfirst=True)
