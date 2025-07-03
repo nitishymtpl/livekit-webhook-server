@@ -30,6 +30,8 @@ class CallAnalyticsResponse(BaseModel):
     call_finished_at: Optional[datetime]
     overall_call_duration_seconds: Optional[int]
     participants: List[ParticipantAnalytics]
+    transcript: Optional[str] = None
+    recording_url: Optional[str] = None
 
 # Models for new endpoints
 class CallSummary(BaseModel):
@@ -39,6 +41,8 @@ class CallSummary(BaseModel):
     call_finished_at: Optional[datetime]
     overall_call_duration_seconds: Optional[int]
     participant_count: int
+    transcript: Optional[str] = None
+    recording_url: Optional[str] = None
 
 class PaginatedCallSummaryResponse(BaseModel):
     items: List[CallSummary]
@@ -67,6 +71,11 @@ class StatsSummary(BaseModel):
     total_participants: int # Consider if this is total unique participants or total participant sessions
     average_duration_seconds: Optional[float]
     average_participants_per_call: Optional[float]
+
+class CallDataUpdateRequest(BaseModel):
+    call_id: str # Room SID
+    transcript: Optional[str] = None
+    recording_url: Optional[str] = None
 
 # Utility for date parsing if needed, or rely on FastAPI's default
 from datetime import date # For date type hint
@@ -157,7 +166,9 @@ async def list_calls(
                 call_created_at=call_created_at_utc,
                 call_finished_at=call_finished_at_utc,
                 overall_call_duration_seconds=overall_call_duration_seconds,
-                participant_count=participant_count
+                participant_count=participant_count,
+                transcript=call_record.transcript,
+                recording_url=call_record.recording_url
             )
         )
 
@@ -190,7 +201,9 @@ async def get_call_summary(
         call_created_at=call_created_at_utc,
         call_finished_at=call_finished_at_utc,
         overall_call_duration_seconds=overall_call_duration_seconds,
-        participant_count=participant_count
+        participant_count=participant_count,
+        transcript=call_record.transcript,
+        recording_url=call_record.recording_url
     )
 
 
@@ -307,7 +320,9 @@ async def get_call_analytics(
         call_created_at=call_created_at_utc,
         call_finished_at=call_finished_at_utc,
         overall_call_duration_seconds=overall_call_duration_seconds,
-        participants=participants_analytics
+        participants=participants_analytics,
+        transcript=call_record.transcript,
+        recording_url=call_record.recording_url
     )
 
 @router.get("/stats", response_model=StatsSummary, dependencies=[Depends(verify_api_key)])
@@ -369,3 +384,47 @@ async def get_aggregate_stats(
 
 # The old /rooms endpoint is removed as it was Redis specific and not part of the current task.
 # If it needs to be re-implemented using PostgreSQL, that would be a separate requirement.
+
+@router.post("/calls/data", status_code=202, dependencies=[Depends(verify_api_key)])
+async def update_call_data(
+    update_request: CallDataUpdateRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Receives transcript and recording URL for a specific call (room)
+    and updates the database. Intended to be called by the LiveKit Agent
+    after a call has finished and data is processed.
+    """
+    call_record = db.query(Call).filter(Call.call_id == update_request.call_id).first()
+
+    if not call_record:
+        # If webhook for room_started hasn't been processed yet, or invalid call_id
+        # We could choose to create a new Call record here if needed,
+        # but for now, let's assume room_started webhook creates it.
+        logging.warning(f"Call data update received for non-existent call_id: {update_request.call_id}")
+        raise HTTPException(status_code=404, detail=f"Call with ID {update_request.call_id} not found. Ensure room_started webhook has been processed.")
+
+    updated = False
+    if update_request.transcript is not None:
+        call_record.transcript = update_request.transcript
+        updated = True
+        logging.info(f"Transcript updated for call_id: {update_request.call_id}")
+
+    if update_request.recording_url is not None:
+        call_record.recording_url = update_request.recording_url
+        updated = True
+        logging.info(f"Recording URL updated for call_id: {update_request.call_id}")
+
+    if updated:
+        try:
+            db.commit()
+            db.refresh(call_record)
+            logging.info(f"Call data for {update_request.call_id} committed to database.")
+        except Exception as e:
+            db.rollback()
+            logging.error(f"Database error updating call data for {update_request.call_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to update call data in database.")
+        return {"message": "Call data update accepted."}
+    else:
+        logging.info(f"No new data provided to update for call_id: {update_request.call_id}")
+        return {"message": "No new data provided for update."}

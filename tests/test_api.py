@@ -587,3 +587,163 @@ def test_get_aggregate_stats_default_to_today(client: TestClient, db_session: Se
     # Check if period_start and period_end correspond to today
     assert datetime.fromisoformat(data["period_start"]).date() == today
     assert datetime.fromisoformat(data["period_end"]).date() == today
+
+# Tests for POST /api/calls/data
+def test_update_call_data_success(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+    call = Call(**sample_call_data)
+    db_session.add(call)
+    db_session.commit()
+    db_session.refresh(call)
+
+    update_payload = {
+        "call_id": sample_call_data["call_id"],
+        "transcript": "This is a test transcript.",
+        "recording_url": "http://example.com/recording.ogg"
+    }
+    headers = {"Authorization": f"Bearer {test_api_key}", "Content-Type": "application/json"}
+    response = client.post("/api/calls/data", json=update_payload, headers=headers)
+
+    assert response.status_code == 202 # Accepted
+    assert response.json()["message"] == "Call data update accepted."
+
+    db_session.refresh(call) # Refresh from DB
+    assert call.transcript == "This is a test transcript."
+    assert call.recording_url == "http://example.com/recording.ogg"
+
+def test_update_call_data_partial_update(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+    call_data = sample_call_data.copy()
+    call_data["call_id"] = "partial_update_call"
+    call = Call(**call_data)
+    db_session.add(call)
+    db_session.commit()
+    db_session.refresh(call)
+
+    # Update only transcript
+    update_payload_transcript = {
+        "call_id": call.call_id,
+        "transcript": "Partial transcript update."
+    }
+    headers = {"Authorization": f"Bearer {test_api_key}", "Content-Type": "application/json"}
+    response_transcript = client.post("/api/calls/data", json=update_payload_transcript, headers=headers)
+    assert response_transcript.status_code == 202
+    db_session.refresh(call)
+    assert call.transcript == "Partial transcript update."
+    assert call.recording_url is None # Should remain unchanged
+
+    # Update only recording_url
+    update_payload_recording = {
+        "call_id": call.call_id,
+        "recording_url": "http://example.com/partial_recording.mp3"
+    }
+    response_recording = client.post("/api/calls/data", json=update_payload_recording, headers=headers)
+    assert response_recording.status_code == 202
+    db_session.refresh(call)
+    assert call.transcript == "Partial transcript update." # Should remain from previous update
+    assert call.recording_url == "http://example.com/partial_recording.mp3"
+
+def test_update_call_data_no_new_data(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+    call = Call(**sample_call_data)
+    db_session.add(call)
+    db_session.commit()
+    db_session.refresh(call)
+
+    update_payload = {
+        "call_id": sample_call_data["call_id"]
+        # No transcript or recording_url
+    }
+    headers = {"Authorization": f"Bearer {test_api_key}", "Content-Type": "application/json"}
+    response = client.post("/api/calls/data", json=update_payload, headers=headers)
+
+    assert response.status_code == 202 # Still accepted, but message indicates no change
+    assert response.json()["message"] == "No new data provided for update."
+    db_session.refresh(call)
+    assert call.transcript is None
+    assert call.recording_url is None
+
+
+def test_update_call_data_call_not_found(client: TestClient, test_api_key: str):
+    update_payload = {
+        "call_id": "non_existent_call_for_update",
+        "transcript": "Some transcript.",
+        "recording_url": "http://example.com/recording.ogg"
+    }
+    headers = {"Authorization": f"Bearer {test_api_key}", "Content-Type": "application/json"}
+    response = client.post("/api/calls/data", json=update_payload, headers=headers)
+
+    assert response.status_code == 404
+    assert "Call with ID non_existent_call_for_update not found" in response.json()["detail"]
+
+def test_update_call_data_auth_errors(client: TestClient, sample_call_data, db_session: Session):
+    call = Call(**sample_call_data) # Add to DB so it's a valid call_id for some tests
+    db_session.add(call)
+    db_session.commit()
+
+    update_payload = {"call_id": sample_call_data["call_id"], "transcript": "test"}
+
+    # No auth header
+    response_no_auth = client.post("/api/calls/data", json=update_payload)
+    assert response_no_auth.status_code == 401
+
+    # Invalid token format
+    headers_invalid_format = {"Authorization": "InvalidToken", "Content-Type": "application/json"}
+    response_invalid_format = client.post("/api/calls/data", json=update_payload, headers=headers_invalid_format)
+    assert response_invalid_format.status_code == 401
+
+    # Wrong API key
+    headers_wrong_key = {"Authorization": "Bearer wrong_key", "Content-Type": "application/json"}
+    response_wrong_key = client.post("/api/calls/data", json=update_payload, headers=headers_wrong_key)
+    assert response_wrong_key.status_code == 403
+
+# Test that analytics endpoints now include transcript and recording_url
+def test_get_call_analytics_includes_new_fields(client: TestClient, db_session: Session, sample_call_data, test_api_key: str):
+    call_data = sample_call_data.copy()
+    call_data["transcript"] = "Analytics transcript"
+    call_data["recording_url"] = "http://analytics.com/rec.ogg"
+    call = Call(**call_data)
+    db_session.add(call)
+    db_session.commit()
+
+    headers = {"Authorization": f"Bearer {test_api_key}"}
+    response = client.get(f"/api/calls/{call_data['call_id']}/analytics", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["transcript"] == call_data["transcript"]
+    assert data["recording_url"] == call_data["recording_url"]
+
+def test_list_calls_includes_new_fields(client: TestClient, db_session: Session, sample_call_data, test_api_key: str):
+    call_data = sample_call_data.copy()
+    call_data["transcript"] = "List transcript"
+    call_data["recording_url"] = "http://list.com/rec.ogg"
+    call_data["call_id"] = "list_call_new_fields"
+    call = Call(**call_data)
+    db_session.add(call)
+    db_session.commit()
+
+    headers = {"Authorization": f"Bearer {test_api_key}"}
+    response = client.get(f"/api/calls?limit=1", headers=headers) # Assuming this call will be first due to default ordering or being only one
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["items"]) > 0
+    # Find the specific call if multiple exist, or ensure only one is in DB for this test
+    item = next((i for i in data["items"] if i["call_id"] == call_data["call_id"]), None)
+    assert item is not None, f"Call {call_data['call_id']} not found in list response"
+    assert item["transcript"] == call_data["transcript"]
+    assert item["recording_url"] == call_data["recording_url"]
+
+
+def test_get_call_summary_includes_new_fields(client: TestClient, db_session: Session, sample_call_data, test_api_key: str):
+    call_data = sample_call_data.copy()
+    call_data["transcript"] = "Summary transcript"
+    call_data["recording_url"] = "http://summary.com/rec.ogg"
+    call_data["call_id"] = "summary_call_new_fields"
+
+    call = Call(**call_data)
+    db_session.add(call)
+    db_session.commit()
+
+    headers = {"Authorization": f"Bearer {test_api_key}"}
+    response = client.get(f"/api/calls/{call_data['call_id']}/summary", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["transcript"] == call_data["transcript"]
+    assert data["recording_url"] == call_data["recording_url"]

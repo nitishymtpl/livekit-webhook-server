@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, func, Text
 from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 import os
@@ -22,6 +22,8 @@ class Call(Base):
     room_name = Column(String, index=True)
     call_created_at = Column(DateTime(timezone=True), server_default=func.now())
     call_finished_at = Column(DateTime(timezone=True), nullable=True)
+    transcript = Column(Text, nullable=True)
+    recording_url = Column(String, nullable=True)
 
     participants = relationship("Participant", back_populates="call")
 
