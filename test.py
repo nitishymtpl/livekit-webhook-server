@@ -41,7 +41,18 @@ class Assistant(Agent):
 
 
 async def entrypoint(ctx: agents.JobContext):
-    logging.info(f"Agent started for room: {ctx.room.name} (SID: {ctx.room.sid})")
+    # Get the room name immediately - this should be available
+    room_name = ctx.room.name
+    
+    logging.info(f"Agent started for room: {room_name}")
+
+    # --- Connect to the room first ---
+    await ctx.connect()
+    logging.info(f"Agent connected to room: {room_name}")
+
+    # Now get the room SID after connection is established
+    room_sid = await ctx.room.sid
+    logging.info(f"Room SID: {room_sid}")
 
     # --- Egress and Data Submission Logic --- 
     lkapi = api.LiveKitAPI(LIVEKIT_API_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -50,11 +61,11 @@ async def entrypoint(ctx: agents.JobContext):
 
     if all([LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AZURE_STORAGE_ACCOUNT_NAME, AZURE_STORAGE_CONTAINER_NAME, (AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT_KEY)]):
         # Define a unique path within your Azure container
-        recording_filename = f"{ctx.room.name}_{ctx.room.sid}.ogg" # Or .mp4, etc.
+        recording_filename = f"{room_name}_{room_sid}.ogg" # Or .mp4, etc.
         recording_filepath_in_container = f"recordings/{recording_filename}"
         
         try:
-            logging.info(f"Starting audio recording for room {ctx.room.name} to Azure Blob Storage")
+            logging.info(f"Starting audio recording for room {room_name} to Azure Blob Storage")
             
             azure_upload_options = api.AzureBlobUpload(
                 account_name=AZURE_STORAGE_ACCOUNT_NAME,
@@ -72,7 +83,7 @@ async def entrypoint(ctx: agents.JobContext):
                     logging.warning("Azure Connection String provided without Account Key. Egress might require Account Key. Please verify LiveKit SDK documentation.")
 
             req = api.RoomCompositeEgressRequest(
-                room_name=ctx.room.name,
+                room_name=room_name,
                 audio_only=True,
                 file_outputs=[api.EncodedFileOutput(
                     file_type=api.EncodedFileType.OGG, 
@@ -86,7 +97,7 @@ async def entrypoint(ctx: agents.JobContext):
             logging.info(f"Egress started with ID: {egress_info.egress_id}. Recording will be at: {recording_url}")
 
         except Exception as e:
-            logging.error(f"Failed to start egress for room {ctx.room.name} to Azure: {e}", exc_info=True)
+            logging.error(f"Failed to start egress for room {room_name} to Azure: {e}", exc_info=True)
     else:
         logging.warning("Recording to Azure is not configured due to missing environment variables.")
 
@@ -99,15 +110,15 @@ async def entrypoint(ctx: agents.JobContext):
 
     # --- Shutdown Hook for Transcript and Data Submission --- 
     async def shutdown_hook():
-        logging.info(f"Shutdown hook called for room: {ctx.room.name}")
+        logging.info(f"Shutdown hook called for room: {room_name}")
         transcript_content = ""
         
         if hasattr(session, 'history'): # Access history from the 'session' object
             transcript_data = session.history.to_dict() 
             transcript_content = json.dumps(transcript_data, indent=2)
-            logging.info(f"Transcript captured for room {ctx.room.name}. Length: {len(transcript_content)}")
+            logging.info(f"Transcript captured for room {room_name}. Length: {len(transcript_content)}")
         else:
-            logging.warning(f"Session history not available on AgentSession for room {ctx.room.name}")
+            logging.warning(f"Session history not available on AgentSession for room {room_name}")
             transcript_content = json.dumps([{"error": "Transcript not available"}])
 
         if egress_info:
@@ -120,7 +131,7 @@ async def entrypoint(ctx: agents.JobContext):
         
         if ANALYTICS_BACKEND_URL and ANALYTICS_INTERNAL_API_KEY:
             payload = {
-                "call_id": ctx.room.sid,
+                "call_id": room_sid,  # Now using the awaited room_sid
                 "transcript": transcript_content,
                 "recording_url": recording_url 
             }
@@ -131,16 +142,16 @@ async def entrypoint(ctx: agents.JobContext):
             
             async with httpx.AsyncClient() as client:
                 try:
-                    logging.info(f"Sending data to analytics backend for room {ctx.room.sid}: {ANALYTICS_BACKEND_URL}")
+                    logging.info(f"Sending data to analytics backend for room {room_sid}: {ANALYTICS_BACKEND_URL}")
                     response = await client.post(ANALYTICS_BACKEND_URL, json=payload, headers=headers)
                     response.raise_for_status()
-                    logging.info(f"Data successfully sent to analytics backend for room {ctx.room.sid}. Status: {response.status_code}")
+                    logging.info(f"Data successfully sent to analytics backend for room {room_sid}. Status: {response.status_code}")
                 except httpx.HTTPStatusError as e:
-                    logging.error(f"HTTP error sending data for room {ctx.room.sid}: {e.response.status_code} - {e.response.text}")
+                    logging.error(f"HTTP error sending data for room {room_sid}: {e.response.status_code} - {e.response.text}")
                 except httpx.RequestError as e:
-                    logging.error(f"Request error sending data for room {ctx.room.sid}: {e}")
+                    logging.error(f"Request error sending data for room {room_sid}: {e}")
                 except Exception as e:
-                    logging.error(f"Unexpected error sending data for room {ctx.room.sid}: {e}")
+                    logging.error(f"Unexpected error sending data for room {room_sid}: {e}")
         else:
             logging.warning("Analytics backend URL or API key not configured. Cannot send data.")
 
@@ -148,7 +159,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     ctx.add_shutdown_callback(shutdown_hook)
 
-    # --- Start Agent Session and Connect --- 
+    # --- Start Agent Session --- 
     await session.start(
         room=ctx.room,
         agent=Assistant(),
@@ -157,16 +168,13 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
 
-    await ctx.connect()
-    logging.info(f"Agent connected to room: {ctx.room.name}")
-
     await session.generate_reply(
         instructions="Greet the user and offer your assistance."
     )
     
     # The agent will now run until the job is complete or interrupted.
     # The shutdown_hook will be called upon termination.
-    logging.info(f"Agent entrypoint for room {ctx.room.name} completed setup. Agent is running.")
+    logging.info(f"Agent entrypoint for room {room_name} completed setup. Agent is running.")
 
 
 if __name__ == "__main__":
