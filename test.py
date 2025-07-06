@@ -129,9 +129,17 @@ async def entrypoint(ctx: agents.JobContext):
             except Exception as e:
                 logging.error(f"Error stopping egress {egress_info.egress_id}: {e}")
         
+        user_id = None
+        if ctx.local_participant:
+            user_id = ctx.local_participant.identity
+            logging.info(f"Using local participant identity as user_id: {user_id}")
+        else:
+            logging.warning("Could not retrieve local_participant context to determine user_id.")
+
         if ANALYTICS_BACKEND_URL and ANALYTICS_INTERNAL_API_KEY:
             payload = {
                 "call_id": room_sid,  # Now using the awaited room_sid
+                "user_id": user_id, # Added user_id
                 "transcript": transcript_content,
                 "recording_url": recording_url 
             }

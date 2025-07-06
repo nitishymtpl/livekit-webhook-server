@@ -12,13 +12,15 @@ If you want to expose more resources, just listen for the webhook, put it in Red
     -   Receives and verifies LiveKit webhook events (`room_started`, `room_finished`, `participant_joined`, `participant_left`).
     -   Authenticates webhooks using `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
     -   Persists call and participant information to a PostgreSQL database.
+    -   Associates a `user_id` (derived from `participant.identity` of the first participant joining or from agent data) with each call.
 -   **API Endpoints (under `/api` prefix, require Bearer token authentication using `INTERNAL_API_KEY`):**
+    -   `GET /users/{user_id}/calls`: Lists calls for a specific user with pagination and optional date filtering. Provides a summary for each call (ID, name, creation/finish times, duration, participant count). This replaces the previous generic `/calls` endpoint.
     -   `GET /calls/{call_id}/analytics`: Returns detailed analytics for a specific call, including overall duration and a list of participants with their individual durations and join/leave times.
-    -   `GET /calls`: Lists all calls with pagination and optional date filtering. Provides a summary for each call (ID, name, creation/finish times, duration, participant count).
     -   `GET /calls/{call_id}/summary`: Returns a summary for a specific call (ID, name, creation/finish times, duration, participant count).
     -   `GET /calls/{call_id}/participants`: Lists all participants for a specific call with pagination. Includes join/leave times and duration in call for each participant.
     -   `GET /calls/{call_id}/participants/{participant_id}`: Returns detailed information for a specific participant within a specific call.
     -   `GET /stats`: Provides aggregate statistics (e.g., total calls, total duration, total participants) for a given day (defaults to today).
+    -   `POST /calls/data`: Receives transcript, recording URL, and `user_id` for a specific call (room SID) from an agent (e.g., the agent in `test.py`) and updates the database.
 
 ## Prerequisites
 
@@ -90,7 +92,7 @@ This section provides examples of the JSON responses you can expect from the API
 }
 ```
 
-**2. List All Calls (`GET /api/calls`)**
+**2. List Calls for a User (`GET /api/users/{user_id}/calls`)**
 ```json
 {
   "items": [

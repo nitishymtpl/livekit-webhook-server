@@ -72,14 +72,19 @@ async def handle_webhook(request: Request, authorization: str = Header(None), db
                 # Find the call record by room_sid
                 call_record = db.query(Call).filter(Call.call_id == event.room.sid).first()
                 if call_record:
+                    # If the call doesn't have a user_id yet, set it from this first/joining participant
+                    if not call_record.user_id and event.participant.identity:
+                        call_record.user_id = event.participant.identity
+                        logging.info(f"Set user_id '{event.participant.identity}' for call {event.room.sid} from joining participant.")
+
                     new_participant = Participant(
                         participant_id=event.participant.sid,
-                        participant_name=event.participant.identity, # Assuming identity is the name
+                        participant_name=event.participant.identity, # Assuming identity is the name/identifier
                         joined_at=joined_at_dt,
                         call_db_id=call_record.id # Link to the Call's primary key
                     )
                     db.add(new_participant)
-                    db.commit()
+                    db.commit() # This will commit both user_id update on Call and new Participant
                     logging.info(f"Participant {event.participant.sid} ({event.participant.identity}) joined room {event.room.sid} and saved to DB.")
                 else:
                     logging.warning(f"Call with SID {event.room.sid} not found for participant {event.participant.sid} to join.")

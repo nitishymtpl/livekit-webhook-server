@@ -146,9 +146,13 @@ def test_get_call_analytics_no_participants(client: TestClient, db_session: Sess
     assert data["overall_call_duration_seconds"] == expected_duration
 
 
-# Tests for GET /api/calls
-def test_list_calls_success(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+# Tests for GET /api/users/{user_id}/calls
+def test_list_user_calls_success(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+    user1_id = "user_list_tester_1"
+    user2_id = "user_list_tester_2"
+
     call1_data = sample_call_data.copy()
+    call1_data["user_id"] = user1_id
     call1 = Call(**call1_data)
     db_session.add(call1)
 
@@ -157,10 +161,20 @@ def test_list_calls_success(client: TestClient, db_session: Session, test_api_ke
     call2_data["room_name"] = "Test Room 2"
     call2_data["call_created_at"] = datetime(2023, 1, 2, 10, 0, 0, tzinfo=timezone.utc)
     call2_data["call_finished_at"] = datetime(2023, 1, 2, 11, 0, 0, tzinfo=timezone.utc)
+    call2_data["user_id"] = user1_id
     call2 = Call(**call2_data)
     db_session.add(call2)
+
+    # Call for another user
+    call3_data = sample_call_data.copy()
+    call3_data["call_id"] = "test_call_sid_3_user2"
+    call3_data["room_name"] = "Test Room 3 User 2"
+    call3_data["user_id"] = user2_id
+    call3 = Call(**call3_data)
+    db_session.add(call3)
+
     db_session.commit()
-    db_session.refresh(call1)
+    db_session.refresh(call1) # To get call1.id
 
     p_data = {
         "participant_id": "p_list_1", "participant_name": "P List",
@@ -171,17 +185,17 @@ def test_list_calls_success(client: TestClient, db_session: Session, test_api_ke
     db_session.commit()
 
     headers = {"Authorization": f"Bearer {test_api_key}"}
-    response = client.get("/api/calls?limit=5", headers=headers)
+    response = client.get(f"/api/users/{user1_id}/calls?limit=5", headers=headers)
 
     assert response.status_code == 200
     data = response.json()
 
-    assert data["total"] == 2
+    assert data["total"] == 2 # Only calls for user1_id
     assert len(data["items"]) == 2
     assert data["limit"] == 5
     assert data["skip"] == 0
 
-    item1 = next(i for i in data["items"] if i["call_id"] == call2_data["call_id"])
+    item1 = next(i for i in data["items"] if i["call_id"] == call2_data["call_id"]) # call2 is more recent by default sort
     item2 = next(i for i in data["items"] if i["call_id"] == call1_data["call_id"])
 
     assert item1["room_name"] == call2_data["room_name"]
@@ -192,74 +206,95 @@ def test_list_calls_success(client: TestClient, db_session: Session, test_api_ke
     assert item2["participant_count"] == 1
     assert item2["overall_call_duration_seconds"] == 3600
 
-def test_list_calls_pagination(client: TestClient, db_session: Session, test_api_key: str):
+    # Check that user2 gets their own call
+    response_user2 = client.get(f"/api/users/{user2_id}/calls?limit=5", headers=headers)
+    assert response_user2.status_code == 200
+    data_user2 = response_user2.json()
+    assert data_user2["total"] == 1
+    assert len(data_user2["items"]) == 1
+    assert data_user2["items"][0]["call_id"] == call3_data["call_id"]
+
+def test_list_user_calls_pagination(client: TestClient, db_session: Session, test_api_key: str):
+    user_id_for_pagination = "user_pagination_test"
     for i in range(3):
         call_data = {
-            "call_id": f"page_call_{i+1}",
-            "room_name": f"Page Room {i+1}",
+            "call_id": f"page_call_user_{i+1}",
+            "room_name": f"Page Room User {i+1}",
+            "user_id": user_id_for_pagination,
             "call_created_at": datetime(2023, 1, 1+i, 10, 0, 0, tzinfo=timezone.utc),
             "call_finished_at": datetime(2023, 1, 1+i, 11, 0, 0, tzinfo=timezone.utc)
         }
         db_session.add(Call(**call_data))
+    # Add a call for another user to ensure filtering works with pagination
+    db_session.add(Call(call_id="other_user_page_call", user_id="other_user", room_name="Other User Page Room"))
     db_session.commit()
 
     headers = {"Authorization": f"Bearer {test_api_key}"}
 
-    response1 = client.get("/api/calls?skip=0&limit=2", headers=headers)
+    response1 = client.get(f"/api/users/{user_id_for_pagination}/calls?skip=0&limit=2", headers=headers)
     data1 = response1.json()
     assert response1.status_code == 200
     assert data1["total"] == 3
     assert len(data1["items"]) == 2
-    assert data1["items"][0]["call_id"] == "page_call_3"
-    assert data1["items"][1]["call_id"] == "page_call_2"
+    # Default sort is by call_created_at descending
+    assert data1["items"][0]["call_id"] == "page_call_user_3"
+    assert data1["items"][1]["call_id"] == "page_call_user_2"
 
-    response2 = client.get("/api/calls?skip=2&limit=2", headers=headers)
+    response2 = client.get(f"/api/users/{user_id_for_pagination}/calls?skip=2&limit=2", headers=headers)
     data2 = response2.json()
     assert response2.status_code == 200
     assert data2["total"] == 3
     assert len(data2["items"]) == 1
-    assert data2["items"][0]["call_id"] == "page_call_1"
+    assert data2["items"][0]["call_id"] == "page_call_user_1"
 
-def test_list_calls_date_filtering(client: TestClient, db_session: Session, test_api_key: str):
-    db_session.add(Call(call_id="date_call_1", room_name="Date Room 1", call_created_at=datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
-    db_session.add(Call(call_id="date_call_2", room_name="Date Room 2", call_created_at=datetime(2023, 1, 15, 12, 0, 0, tzinfo=timezone.utc)))
-    db_session.add(Call(call_id="date_call_3", room_name="Date Room 3", call_created_at=datetime(2023, 2, 1, 12, 0, 0, tzinfo=timezone.utc)))
+def test_list_user_calls_date_filtering(client: TestClient, db_session: Session, test_api_key: str):
+    user_id_for_date_filter = "user_date_filter_test"
+    db_session.add(Call(call_id="date_user_call_1", user_id=user_id_for_date_filter, room_name="Date User Room 1", call_created_at=datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
+    db_session.add(Call(call_id="date_user_call_2", user_id=user_id_for_date_filter, room_name="Date User Room 2", call_created_at=datetime(2023, 1, 15, 12, 0, 0, tzinfo=timezone.utc)))
+    db_session.add(Call(call_id="date_user_call_3", user_id=user_id_for_date_filter, room_name="Date User Room 3", call_created_at=datetime(2023, 2, 1, 12, 0, 0, tzinfo=timezone.utc)))
+    # Add a call for another user on one of these dates to ensure it's not picked up
+    db_session.add(Call(call_id="other_user_date_call", user_id="other_user", room_name="Other User Date Room", call_created_at=datetime(2023, 1, 15, 13, 0, 0, tzinfo=timezone.utc)))
     db_session.commit()
 
     headers = {"Authorization": f"Bearer {test_api_key}"}
 
-    response_start = client.get("/api/calls?start_date=2023-01-15", headers=headers)
+    response_start = client.get(f"/api/users/{user_id_for_date_filter}/calls?start_date=2023-01-15", headers=headers)
     data_start = response_start.json()
     assert response_start.status_code == 200
     assert data_start["total"] == 2
-    assert {item["call_id"] for item in data_start["items"]} == {"date_call_2", "date_call_3"}
+    assert {item["call_id"] for item in data_start["items"]} == {"date_user_call_2", "date_user_call_3"}
 
-    response_end = client.get("/api/calls?end_date=2023-01-15", headers=headers)
+    response_end = client.get(f"/api/users/{user_id_for_date_filter}/calls?end_date=2023-01-15", headers=headers)
     data_end = response_end.json()
     assert response_end.status_code == 200
     assert data_end["total"] == 2
-    assert {item["call_id"] for item in data_end["items"]} == {"date_call_1", "date_call_2"}
+    assert {item["call_id"] for item in data_end["items"]} == {"date_user_call_1", "date_user_call_2"}
 
-    response_both = client.get("/api/calls?start_date=2023-01-01&end_date=2023-01-31", headers=headers)
+    response_both = client.get(f"/api/users/{user_id_for_date_filter}/calls?start_date=2023-01-01&end_date=2023-01-31", headers=headers)
     data_both = response_both.json()
     assert response_both.status_code == 200
     assert data_both["total"] == 2
-    assert {item["call_id"] for item in data_both["items"]} == {"date_call_1", "date_call_2"}
+    assert {item["call_id"] for item in data_both["items"]} == {"date_user_call_1", "date_user_call_2"}
 
-    response_none = client.get("/api/calls?start_date=2024-01-01", headers=headers)
+    response_none = client.get(f"/api/users/{user_id_for_date_filter}/calls?start_date=2024-01-01", headers=headers)
     data_none = response_none.json()
     assert response_none.status_code == 200
     assert data_none["total"] == 0
     assert len(data_none["items"]) == 0
 
-def test_list_calls_empty(client: TestClient, test_api_key: str):
+def test_list_user_calls_empty_for_user(client: TestClient, test_api_key: str, db_session: Session):
+    # Add a call for some other user
+    db_session.add(Call(call_id="unrelated_call", user_id="unrelated_user", room_name="Unrelated Room"))
+    db_session.commit()
+
+    user_id_with_no_calls = "user_with_no_calls"
     headers = {"Authorization": f"Bearer {test_api_key}"}
-    response = client.get("/api/calls", headers=headers)
+    response = client.get(f"/api/users/{user_id_with_no_calls}/calls", headers=headers)
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 0
     assert len(data["items"]) == 0
-    assert data["limit"] == 10
+    assert data["limit"] == 10 # Default limit
     assert data["skip"] == 0
 
 # Tests for GET /api/calls/{call_id}/summary
@@ -590,13 +625,18 @@ def test_get_aggregate_stats_default_to_today(client: TestClient, db_session: Se
 
 # Tests for POST /api/calls/data
 def test_update_call_data_success(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
-    call = Call(**sample_call_data)
+    call_data = sample_call_data.copy()
+    # Ensure user_id is initially None or different to test update
+    call_data["user_id"] = None
+    call = Call(**call_data)
     db_session.add(call)
     db_session.commit()
     db_session.refresh(call)
 
+    requesting_user_id = "user_updater_1"
     update_payload = {
         "call_id": sample_call_data["call_id"],
+        "user_id": requesting_user_id,
         "transcript": "This is a test transcript.",
         "recording_url": "http://example.com/recording.ogg"
     }
@@ -609,18 +649,48 @@ def test_update_call_data_success(client: TestClient, db_session: Session, test_
     db_session.refresh(call) # Refresh from DB
     assert call.transcript == "This is a test transcript."
     assert call.recording_url == "http://example.com/recording.ogg"
+    assert call.user_id == requesting_user_id # Verify user_id was set
 
-def test_update_call_data_partial_update(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+def test_update_call_data_user_id_already_set_no_change(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+    existing_user_id = "existing_user_abc"
     call_data = sample_call_data.copy()
-    call_data["call_id"] = "partial_update_call"
+    call_data["call_id"] = "call_with_existing_user"
+    call_data["user_id"] = existing_user_id
     call = Call(**call_data)
     db_session.add(call)
     db_session.commit()
     db_session.refresh(call)
 
-    # Update only transcript
+    new_user_id_in_request = "new_user_xyz"
+    update_payload = {
+        "call_id": call_data["call_id"],
+        "user_id": new_user_id_in_request, # Attempt to change user_id
+        "transcript": "Transcript for existing user call."
+    }
+    headers = {"Authorization": f"Bearer {test_api_key}", "Content-Type": "application/json"}
+    response = client.post("/api/calls/data", json=update_payload, headers=headers)
+    assert response.status_code == 202
+
+    db_session.refresh(call)
+    assert call.user_id == existing_user_id # User ID should NOT have changed
+    assert call.transcript == "Transcript for existing user call."
+
+
+def test_update_call_data_partial_update(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
+    call_data = sample_call_data.copy()
+    call_data["call_id"] = "partial_update_call"
+    call_data["user_id"] = None # Start with no user_id
+    call = Call(**call_data)
+    db_session.add(call)
+    db_session.commit()
+    db_session.refresh(call)
+
+    user_for_partial_update = "user_partial_updater"
+
+    # Update only transcript and user_id (if not set)
     update_payload_transcript = {
         "call_id": call.call_id,
+        "user_id": user_for_partial_update,
         "transcript": "Partial transcript update."
     }
     headers = {"Authorization": f"Bearer {test_api_key}", "Content-Type": "application/json"}
@@ -629,10 +699,12 @@ def test_update_call_data_partial_update(client: TestClient, db_session: Session
     db_session.refresh(call)
     assert call.transcript == "Partial transcript update."
     assert call.recording_url is None # Should remain unchanged
+    assert call.user_id == user_for_partial_update
 
-    # Update only recording_url
+    # Update only recording_url, user_id should remain as previously set
     update_payload_recording = {
         "call_id": call.call_id,
+        # Not sending user_id, or sending the same one, should not cause issues
         "recording_url": "http://example.com/partial_recording.mp3"
     }
     response_recording = client.post("/api/calls/data", json=update_payload_recording, headers=headers)
@@ -640,15 +712,19 @@ def test_update_call_data_partial_update(client: TestClient, db_session: Session
     db_session.refresh(call)
     assert call.transcript == "Partial transcript update." # Should remain from previous update
     assert call.recording_url == "http://example.com/partial_recording.mp3"
+    assert call.user_id == user_for_partial_update # Should remain from previous update
 
 def test_update_call_data_no_new_data(client: TestClient, db_session: Session, test_api_key: str, sample_call_data):
-    call = Call(**sample_call_data)
+    call_data = sample_call_data.copy()
+    call_data["user_id"] = "user_no_new_data"
+    call = Call(**call_data)
     db_session.add(call)
     db_session.commit()
     db_session.refresh(call)
 
     update_payload = {
-        "call_id": sample_call_data["call_id"]
+        "call_id": call_data["call_id"],
+        "user_id": call_data["user_id"] # Sending same user_id
         # No transcript or recording_url
     }
     headers = {"Authorization": f"Bearer {test_api_key}", "Content-Type": "application/json"}
@@ -657,13 +733,15 @@ def test_update_call_data_no_new_data(client: TestClient, db_session: Session, t
     assert response.status_code == 202 # Still accepted, but message indicates no change
     assert response.json()["message"] == "No new data provided for update."
     db_session.refresh(call)
-    assert call.transcript is None
-    assert call.recording_url is None
+    assert call.transcript is None # Assuming it was None in sample_call_data
+    assert call.recording_url is None # Assuming it was None in sample_call_data
+    assert call.user_id == "user_no_new_data"
 
 
 def test_update_call_data_call_not_found(client: TestClient, test_api_key: str):
     update_payload = {
         "call_id": "non_existent_call_for_update",
+        "user_id": "any_user",
         "transcript": "Some transcript.",
         "recording_url": "http://example.com/recording.ogg"
     }
@@ -710,23 +788,24 @@ def test_get_call_analytics_includes_new_fields(client: TestClient, db_session: 
     assert data["transcript"] == call_data["transcript"]
     assert data["recording_url"] == call_data["recording_url"]
 
-def test_list_calls_includes_new_fields(client: TestClient, db_session: Session, sample_call_data, test_api_key: str):
+def test_list_user_calls_includes_new_fields(client: TestClient, db_session: Session, sample_call_data, test_api_key: str):
+    user_id_for_list_fields = "user_list_fields_test"
     call_data = sample_call_data.copy()
     call_data["transcript"] = "List transcript"
     call_data["recording_url"] = "http://list.com/rec.ogg"
-    call_data["call_id"] = "list_call_new_fields"
+    call_data["call_id"] = "list_call_new_fields_user"
+    call_data["user_id"] = user_id_for_list_fields
     call = Call(**call_data)
     db_session.add(call)
     db_session.commit()
 
     headers = {"Authorization": f"Bearer {test_api_key}"}
-    response = client.get(f"/api/calls?limit=1", headers=headers) # Assuming this call will be first due to default ordering or being only one
+    response = client.get(f"/api/users/{user_id_for_list_fields}/calls?limit=1", headers=headers)
     assert response.status_code == 200
     data = response.json()
-    assert len(data["items"]) > 0
-    # Find the specific call if multiple exist, or ensure only one is in DB for this test
-    item = next((i for i in data["items"] if i["call_id"] == call_data["call_id"]), None)
-    assert item is not None, f"Call {call_data['call_id']} not found in list response"
+    assert len(data["items"]) == 1 # Since we are querying for a specific user and added one call
+    item = data["items"][0]
+    assert item["call_id"] == call_data["call_id"]
     assert item["transcript"] == call_data["transcript"]
     assert item["recording_url"] == call_data["recording_url"]
 

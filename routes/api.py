@@ -74,6 +74,7 @@ class StatsSummary(BaseModel):
 
 class CallDataUpdateRequest(BaseModel):
     call_id: str # Room SID
+    user_id: Optional[str] = None # Added user_id
     transcript: Optional[str] = None
     recording_url: Optional[str] = None
 
@@ -127,15 +128,16 @@ def verify_api_key(authorization: str = Header(None)):
     logging.info("API request authorized with static API key.")
 
 
-@router.get("/calls", response_model=PaginatedCallSummaryResponse, dependencies=[Depends(verify_api_key)])
-async def list_calls(
+@router.get("/users/{user_id}/calls", response_model=PaginatedCallSummaryResponse, dependencies=[Depends(verify_api_key)])
+async def list_user_calls(
+    user_id: str = Path(..., description="The ID of the user whose calls are to be listed"),
     db: Session = Depends(get_db),
     skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
     limit: int = Query(10, ge=1, le=100, description="Maximum number of records to return"),
     start_date: Optional[date] = Query(None, description="Filter calls created on or after this date (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Filter calls created on or before this date (YYYY-MM-DD)")
 ):
-    query = db.query(Call)
+    query = db.query(Call).filter(Call.user_id == user_id)
 
     if start_date:
         start_datetime = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
@@ -401,10 +403,24 @@ async def update_call_data(
         # If webhook for room_started hasn't been processed yet, or invalid call_id
         # We could choose to create a new Call record here if needed,
         # but for now, let's assume room_started webhook creates it.
+        # However, if it's not found, we could also consider creating it here if user_id is provided.
+        # For now, sticking to the plan of requiring room_started webhook first.
         logging.warning(f"Call data update received for non-existent call_id: {update_request.call_id}")
         raise HTTPException(status_code=404, detail=f"Call with ID {update_request.call_id} not found. Ensure room_started webhook has been processed.")
 
     updated = False
+    # Handle user_id update
+    if update_request.user_id:
+        if call_record.user_id is None:
+            call_record.user_id = update_request.user_id
+            updated = True
+            logging.info(f"User ID '{update_request.user_id}' set for call_id: {update_request.call_id}")
+        elif call_record.user_id != update_request.user_id:
+            logging.warning(f"User ID mismatch for call_id: {update_request.call_id}. "
+                            f"Existing: '{call_record.user_id}', Received: '{update_request.user_id}'. "
+                            f"Existing user_id will be kept.")
+            # Not setting updated = True here as we are not changing the user_id in this case.
+
     if update_request.transcript is not None:
         call_record.transcript = update_request.transcript
         updated = True

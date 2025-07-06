@@ -22,6 +22,7 @@ class Call(Base):
     room_name = Column(String, index=True)
     call_created_at = Column(DateTime(timezone=True), server_default=func.now())
     call_finished_at = Column(DateTime(timezone=True), nullable=True)
+    user_id = Column(String, nullable=True, index=True)  # Added user_id
     transcript = Column(Text, nullable=True)
     recording_url = Column(String, nullable=True)
 
